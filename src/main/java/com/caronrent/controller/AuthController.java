@@ -33,7 +33,7 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<JwtResponse> login(@RequestBody LoginRequest request) {
         String token = authService.login(request);
-        return ResponseEntity.ok(new JwtResponse(token, "Bearer", request.getEmail()));
+        return ResponseEntity.ok(new JwtResponse(token, "Bearer", request.getEmail(), true));
     }
 
     @GetMapping("/public/health")

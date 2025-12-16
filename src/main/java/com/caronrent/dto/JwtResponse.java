@@ -10,4 +10,5 @@ public class JwtResponse {
     private String token;
     private String type = "Bearer";
     private String email;
+    private boolean status;
 }
