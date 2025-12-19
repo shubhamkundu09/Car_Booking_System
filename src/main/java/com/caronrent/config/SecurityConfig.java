@@ -38,9 +38,13 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**", "/api/public/**").permitAll()
+                        .requestMatchers("/api/cars/public/**").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/user/**").hasAnyRole("USER", "ADMIN")
-                        .requestMatchers("api/carowner/**").hasAnyRole("CAROWNER", "ADMIN")
+                        .requestMatchers("/api/cars/owner/**").hasAnyRole("CAROWNER", "ADMIN")
+                        .requestMatchers("/api/bookings/user/**").hasAnyRole("USER", "ADMIN")
+                        .requestMatchers("/api/bookings/owner/**").hasAnyRole("CAROWNER", "ADMIN")
+                        .requestMatchers("/api/bookings/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

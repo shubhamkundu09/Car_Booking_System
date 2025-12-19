@@ -22,7 +22,7 @@ public class TestController {
     }
 
     @GetMapping("/user")
-    @PreAuthorize("hasAnyRole('USER','CAROWNER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
     public ResponseEntity<String> userEndpoint() {
         return ResponseEntity.ok("This is a user endpoint");
     }
