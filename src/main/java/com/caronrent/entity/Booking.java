@@ -34,26 +34,52 @@ public class Booking {
     private Double totalAmount;
 
     @Column(nullable = false)
-    private String status; // PENDING, CONFIRMED, CANCELLED, COMPLETED
+    private String status; // PENDING, PAYMENT_PENDING, CONFIRMED, CANCELLED, COMPLETED
 
     @Column(nullable = false)
-    private String paymentStatus; // PENDING, PAID, FAILED
+    private String paymentStatus; // PENDING, PAID, FAILED, REFUNDED
+
+    @Column(unique = true)
+    private String paymentId; // Razorpay payment ID
+
+    @Column(unique = true)
+    private String orderId; // Razorpay order ID
+
+    @Column(nullable = false)
+    private Double amountPaid;
 
     private String specialRequests;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private LocalDateTime confirmedAt;
+    private LocalDateTime cancelledAt;
 
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
-        status = "PENDING";
+        status = "PAYMENT_PENDING"; // Changed from PENDING
         paymentStatus = "PENDING";
+        amountPaid = 0.0;
     }
 
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
+
+    public boolean canBeConfirmed() {
+        return "PAYMENT_PENDING".equals(status) && "PAID".equals(paymentStatus);
+    }
+
+    public boolean canBeCancelled() {
+        return !"CANCELLED".equals(status) && !"COMPLETED".equals(status);
+    }
+
+    // ========== ADDED: Helper method to check date overlap ==========
+    public boolean overlapsWith(LocalDateTime start, LocalDateTime end) {
+        return !(end.isBefore(this.startDate) || start.isAfter(this.endDate));
+    }
+    // ========== END ADDITION ==========
 }

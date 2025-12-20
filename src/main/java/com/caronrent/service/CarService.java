@@ -11,6 +11,8 @@ import com.caronrent.repo.UserRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -94,7 +96,19 @@ public class CarService {
     }
 
     public List<Car> getAllAvailableCars() {
-        return carRepository.findByIsAvailableTrueAndIsActiveTrue();
+        List<Car> cars = carRepository.findByIsAvailableTrueAndIsActiveTrue();
+
+        // ========== UPDATED: Better availability filtering ==========
+        // Filter out cars that have active bookings
+        return cars.stream()
+                .filter(car -> car.getBookings().stream()
+                        .noneMatch(booking ->
+                                booking.overlapsWith(LocalDateTime.now(), LocalDateTime.now().plusDays(1)) && // Check if booked today or future
+                                        !"CANCELLED".equals(booking.getStatus()) &&
+                                        !"COMPLETED".equals(booking.getStatus())
+                        ))
+                .toList();
+        // ========== END UPDATE ==========
     }
 
     public List<Car> searchCarsByLocation(String location) {
