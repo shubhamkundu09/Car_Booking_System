@@ -1,6 +1,7 @@
 package com.caronrent.service;
 
 import com.caronrent.dto.BookingRequestDTO;
+import com.caronrent.dto.BookingResponseDTO;
 import com.caronrent.entity.Booking;
 import com.caronrent.entity.Car;
 import com.caronrent.entity.User;
@@ -9,9 +10,11 @@ import com.caronrent.repo.CarRepository;
 import com.caronrent.repo.UserRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
+
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class BookingService {
@@ -19,21 +22,25 @@ public class BookingService {
     private final CarRepository carRepository;
     private final UserRepository userRepository;
     private final PaymentService paymentService;
+    private final IdEncryptionService idEncryptionService;
 
     public BookingService(BookingRepository bookingRepository, CarRepository carRepository,
-                          UserRepository userRepository, PaymentService paymentService) {
+                          UserRepository userRepository, PaymentService paymentService,
+                          IdEncryptionService idEncryptionService) {
         this.bookingRepository = bookingRepository;
         this.carRepository = carRepository;
         this.userRepository = userRepository;
         this.paymentService = paymentService;
+        this.idEncryptionService = idEncryptionService;
     }
 
     @Transactional
-    public Booking createBooking(String userEmail, BookingRequestDTO bookingRequest) {
+    public BookingResponseDTO createBooking(String userEmail, BookingRequestDTO bookingRequest) {
+        Long carId = idEncryptionService.decryptId(bookingRequest.getCarId());
         User user = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        Car car = carRepository.findById(bookingRequest.getCarId())
+        Car car = carRepository.findById(carId)
                 .orElseThrow(() -> new RuntimeException("Car not found"));
 
         // Check if car is available
@@ -41,19 +48,16 @@ public class BookingService {
             throw new RuntimeException("Car is not available for booking");
         }
 
-        // ========== UPDATED: Check overlapping bookings for THIS car only ==========
-        // Previously was checking all cars from the owner, now only checks the specific car
+        // Check overlapping bookings
         List<Booking> overlappingBookings = bookingRepository.findOverlappingBookings(
-                car.getId(),  // Only check this specific car
+                carId,
                 bookingRequest.getStartDate(),
                 bookingRequest.getEndDate()
         );
 
-        // Check if there are any overlapping bookings for THIS CAR
         if (!overlappingBookings.isEmpty()) {
             throw new RuntimeException("Car is already booked for the selected dates");
         }
-        // ========== END UPDATE ==========
 
         // Calculate total days and amount
         long days = ChronoUnit.DAYS.between(
@@ -71,10 +75,6 @@ public class BookingService {
 
         double totalAmount = days * car.getDailyRate();
 
-        // Mark car as unavailable temporarily
-        car.setIsAvailable(false);
-        carRepository.save(car);
-
         // Create booking
         Booking booking = new Booking();
         booking.setCar(car);
@@ -87,25 +87,31 @@ public class BookingService {
         booking.setStatus("PAYMENT_PENDING");
         booking.setPaymentStatus("PENDING");
 
-        return bookingRepository.save(booking);
+        Booking savedBooking = bookingRepository.save(booking);
+        return convertToResponseDTO(savedBooking);
     }
 
-    public List<Booking> getUserBookings(String userEmail) {
+    public List<BookingResponseDTO> getUserBookings(String userEmail) {
         User user = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        return bookingRepository.findByUser(user);
+        return bookingRepository.findByUser(user).stream()
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
     }
 
-    public List<Booking> getOwnerBookings(String ownerEmail) {
+    public List<BookingResponseDTO> getOwnerBookings(String ownerEmail) {
         User owner = userRepository.findByEmail(ownerEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        return bookingRepository.findByCarOwner(owner);
+        return bookingRepository.findByCarOwner(owner).stream()
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
     }
 
     @Transactional
-    public Booking confirmBooking(Long bookingId, String ownerEmail) {
+    public BookingResponseDTO confirmBooking(String encryptedBookingId, String ownerEmail) {
+        Long bookingId = idEncryptionService.decryptId(encryptedBookingId);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
 
@@ -126,11 +132,13 @@ public class BookingService {
         // Car remains unavailable
         booking.getCar().setIsAvailable(false);
 
-        return bookingRepository.save(booking);
+        Booking updatedBooking = bookingRepository.save(booking);
+        return convertToResponseDTO(updatedBooking);
     }
 
     @Transactional
-    public Booking cancelBooking(Long bookingId, String userEmail) {
+    public BookingResponseDTO cancelBooking(String encryptedBookingId, String userEmail) {
+        Long bookingId = idEncryptionService.decryptId(encryptedBookingId);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
 
@@ -174,11 +182,13 @@ public class BookingService {
             }
         }
 
-        return bookingRepository.save(booking);
+        Booking updatedBooking = bookingRepository.save(booking);
+        return convertToResponseDTO(updatedBooking);
     }
 
     @Transactional
-    public Booking cancelBookingByOwner(Long bookingId, String ownerEmail) {
+    public BookingResponseDTO cancelBookingByOwner(String encryptedBookingId, String ownerEmail) {
+        Long bookingId = idEncryptionService.decryptId(encryptedBookingId);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
 
@@ -212,10 +222,12 @@ public class BookingService {
             }
         }
 
-        return bookingRepository.save(booking);
+        Booking updatedBooking = bookingRepository.save(booking);
+        return convertToResponseDTO(updatedBooking);
     }
 
-    public Booking updatePaymentStatus(Long bookingId, String status) {
+    public BookingResponseDTO updatePaymentStatus(String encryptedBookingId, String status) {
+        Long bookingId = idEncryptionService.decryptId(encryptedBookingId);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
 
@@ -227,20 +239,51 @@ public class BookingService {
             booking.getCar().setIsAvailable(true);
         }
 
-        return bookingRepository.save(booking);
+        Booking updatedBooking = bookingRepository.save(booking);
+        return convertToResponseDTO(updatedBooking);
     }
 
-    public Booking getBookingById(Long bookingId) {
-        return bookingRepository.findById(bookingId)
+    public BookingResponseDTO getBookingById(String encryptedBookingId) {
+        Long bookingId = idEncryptionService.decryptId(encryptedBookingId);
+        Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
+        return convertToResponseDTO(booking);
     }
 
-    public List<Booking> getActiveBookingsForCar(Long carId) {
+    public List<BookingResponseDTO> getActiveBookingsForCar(String encryptedCarId) {
+        Long carId = idEncryptionService.decryptId(encryptedCarId);
         Car car = carRepository.findById(carId)
                 .orElseThrow(() -> new RuntimeException("Car not found"));
 
         return bookingRepository.findByCar(car).stream()
                 .filter(b -> !"CANCELLED".equals(b.getStatus()) && !"COMPLETED".equals(b.getStatus()))
+                .map(this::convertToResponseDTO)
                 .toList();
+    }
+
+    private BookingResponseDTO convertToResponseDTO(Booking booking) {
+        BookingResponseDTO dto = new BookingResponseDTO();
+        dto.setId(idEncryptionService.encryptId(booking.getId()));
+        dto.setCarId(idEncryptionService.encryptId(booking.getCar().getId()));
+        dto.setCarBrand(booking.getCar().getBrand());
+        dto.setCarModel(booking.getCar().getModel());
+        dto.setUserId(idEncryptionService.encryptId(booking.getUser().getId()));
+        dto.setUserEmail(booking.getUser().getEmail());
+        dto.setOwnerEmail(booking.getCar().getOwner().getEmail());
+        dto.setStartDate(booking.getStartDate());
+        dto.setEndDate(booking.getEndDate());
+        dto.setTotalDays(booking.getTotalDays());
+        dto.setTotalAmount(booking.getTotalAmount());
+        dto.setStatus(booking.getStatus());
+        dto.setPaymentStatus(booking.getPaymentStatus());
+        dto.setPaymentId(booking.getPaymentId());
+        dto.setOrderId(booking.getOrderId());
+        dto.setAmountPaid(booking.getAmountPaid());
+        dto.setSpecialRequests(booking.getSpecialRequests());
+        dto.setCreatedAt(booking.getCreatedAt());
+        dto.setUpdatedAt(booking.getUpdatedAt());
+        dto.setConfirmedAt(booking.getConfirmedAt());
+        dto.setCancelledAt(booking.getCancelledAt());
+        return dto;
     }
 }

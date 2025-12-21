@@ -1,6 +1,7 @@
 package com.caronrent.service;
 
 import com.caronrent.dto.CarDTO;
+import com.caronrent.dto.CarResponseDTO;
 import com.caronrent.dto.CarStatusDTO;
 import com.caronrent.entity.Car;
 import com.caronrent.entity.CarImage;
@@ -21,16 +22,18 @@ public class CarService {
     private final CarRepository carRepository;
     private final UserRepository userRepository;
     private final CarImageRepository carImageRepository;
+    private final IdEncryptionService idEncryptionService;
 
     public CarService(CarRepository carRepository, UserRepository userRepository,
-                      CarImageRepository carImageRepository) {
+                      CarImageRepository carImageRepository, IdEncryptionService idEncryptionService) {
         this.carRepository = carRepository;
         this.userRepository = userRepository;
         this.carImageRepository = carImageRepository;
+        this.idEncryptionService = idEncryptionService;
     }
 
     @Transactional
-    public Car addCar(String ownerEmail, CarDTO carDTO) {
+    public CarResponseDTO addCar(String ownerEmail, CarDTO carDTO) {
         User owner = userRepository.findByEmail(ownerEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
@@ -65,17 +68,20 @@ public class CarService {
             }
         }
 
-        return savedCar;
+        return convertToResponseDTO(savedCar);
     }
 
-    public List<Car> getMyCars(String ownerEmail) {
+    public List<CarResponseDTO> getMyCars(String ownerEmail) {
         User owner = userRepository.findByEmail(ownerEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        return carRepository.findByOwner(owner);
+        return carRepository.findByOwner(owner).stream()
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
     }
 
-    public Car updateCarStatus(Long carId, String ownerEmail, CarStatusDTO statusDTO) {
+    public CarResponseDTO updateCarStatus(String encryptedCarId, String ownerEmail, CarStatusDTO statusDTO) {
+        Long carId = idEncryptionService.decryptId(encryptedCarId);
         Car car = carRepository.findById(carId)
                 .orElseThrow(() -> new RuntimeException("Car not found"));
 
@@ -92,44 +98,98 @@ public class CarService {
             car.setIsAvailable(statusDTO.getIsAvailable());
         }
 
-        return carRepository.save(car);
+        Car updatedCar = carRepository.save(car);
+        return convertToResponseDTO(updatedCar);
     }
 
-    public List<Car> getAllAvailableCars() {
+    public List<CarResponseDTO> getAllAvailableCars() {
         List<Car> cars = carRepository.findByIsAvailableTrueAndIsActiveTrue();
 
-        // ========== UPDATED: Better availability filtering ==========
-        // Filter out cars that have active bookings
         return cars.stream()
                 .filter(car -> car.getBookings().stream()
                         .noneMatch(booking ->
-                                booking.overlapsWith(LocalDateTime.now(), LocalDateTime.now().plusDays(1)) && // Check if booked today or future
+                                booking.overlapsWith(LocalDateTime.now(), LocalDateTime.now().plusDays(1)) &&
                                         !"CANCELLED".equals(booking.getStatus()) &&
                                         !"COMPLETED".equals(booking.getStatus())
                         ))
+                .map(this::convertToResponseDTO)
                 .toList();
-        // ========== END UPDATE ==========
     }
 
-    public List<Car> searchCarsByLocation(String location) {
-        return carRepository.findByLocationContainingIgnoreCaseAndIsAvailableTrueAndIsActiveTrue(location);
+    public List<CarResponseDTO> getAvailableCarsByDate(LocalDateTime startDate, LocalDateTime endDate) {
+        List<Car> cars = carRepository.findByIsAvailableTrueAndIsActiveTrue();
+
+        return cars.stream()
+                .filter(car -> isCarAvailableForDates(car, startDate, endDate))
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
     }
 
-    public List<Car> searchCarsByBrand(String brand) {
-        return carRepository.findByBrandContainingIgnoreCaseAndIsAvailableTrueAndIsActiveTrue(brand);
+    private boolean isCarAvailableForDates(Car car, LocalDateTime startDate, LocalDateTime endDate) {
+        return car.getBookings().stream()
+                .noneMatch(booking ->
+                        booking.overlapsWith(startDate, endDate) &&
+                                !"CANCELLED".equals(booking.getStatus()) &&
+                                !"COMPLETED".equals(booking.getStatus())
+                );
     }
 
-    public List<Car> searchCarsByPriceRange(Double minPrice, Double maxPrice) {
-        return carRepository.findByDailyRateBetweenAndIsAvailableTrueAndIsActiveTrue(minPrice, maxPrice);
+    public List<CarResponseDTO> searchCarsByLocation(String location) {
+        return carRepository.findByLocationContainingIgnoreCaseAndIsAvailableTrueAndIsActiveTrue(location).stream()
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
     }
 
-    public Car getCarById(Long carId) {
-        return carRepository.findById(carId)
+    public List<CarResponseDTO> searchCarsByLocationAndDate(String location, LocalDateTime startDate, LocalDateTime endDate) {
+        List<Car> cars = carRepository.findByLocationContainingIgnoreCaseAndIsAvailableTrueAndIsActiveTrue(location);
+
+        return cars.stream()
+                .filter(car -> isCarAvailableForDates(car, startDate, endDate))
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
+    }
+
+    public List<CarResponseDTO> searchCarsByBrand(String brand) {
+        return carRepository.findByBrandContainingIgnoreCaseAndIsAvailableTrueAndIsActiveTrue(brand).stream()
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
+    }
+
+    public List<CarResponseDTO> searchCarsByBrandAndDate(String brand, LocalDateTime startDate, LocalDateTime endDate) {
+        List<Car> cars = carRepository.findByBrandContainingIgnoreCaseAndIsAvailableTrueAndIsActiveTrue(brand);
+
+        return cars.stream()
+                .filter(car -> isCarAvailableForDates(car, startDate, endDate))
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
+    }
+
+    public List<CarResponseDTO> searchCarsByPriceRange(Double minPrice, Double maxPrice) {
+        return carRepository.findByDailyRateBetweenAndIsAvailableTrueAndIsActiveTrue(minPrice, maxPrice).stream()
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
+    }
+
+    public List<CarResponseDTO> searchCarsByPriceRangeAndDate(Double minPrice, Double maxPrice, LocalDateTime startDate, LocalDateTime endDate) {
+        List<Car> cars = carRepository.findByDailyRateBetweenAndIsAvailableTrueAndIsActiveTrue(minPrice, maxPrice);
+
+        return cars.stream()
+                .filter(car -> isCarAvailableForDates(car, startDate, endDate))
+                .map(this::convertToResponseDTO)
+                .collect(Collectors.toList());
+    }
+
+    public CarResponseDTO getCarById(String encryptedCarId) {
+        Long carId = idEncryptionService.decryptId(encryptedCarId);
+        Car car = carRepository.findById(carId)
                 .orElseThrow(() -> new RuntimeException("Car not found"));
+
+        return convertToResponseDTO(car);
     }
 
     @Transactional
-    public void deleteCar(Long carId, String ownerEmail) {
+    public void deleteCar(String encryptedCarId, String ownerEmail) {
+        Long carId = idEncryptionService.decryptId(encryptedCarId);
         Car car = carRepository.findById(carId)
                 .orElseThrow(() -> new RuntimeException("Car not found"));
 
@@ -141,10 +201,10 @@ public class CarService {
         // Check if there are any active bookings
         if (!car.getBookings().isEmpty()) {
             boolean hasActiveBookings = car.getBookings().stream()
-                    .anyMatch(b -> b.getStatus().equals("PENDING") || b.getStatus().equals("CONFIRMED"));
+                    .anyMatch(b -> b.getStatus().equals("CONFIRMED"));
 
             if (hasActiveBookings) {
-                throw new RuntimeException("Cannot delete car with active bookings");
+                throw new RuntimeException("Cannot delete car with confirmed bookings");
             }
         }
 
@@ -153,5 +213,32 @@ public class CarService {
 
         // Then delete the car
         carRepository.delete(car);
+    }
+
+    private CarResponseDTO convertToResponseDTO(Car car) {
+        CarResponseDTO dto = new CarResponseDTO();
+        dto.setId(idEncryptionService.encryptId(car.getId()));
+        dto.setBrand(car.getBrand());
+        dto.setModel(car.getModel());
+        dto.setYear(car.getYear());
+        dto.setRegistrationNumber(car.getRegistrationNumber());
+        dto.setColor(car.getColor());
+        dto.setDailyRate(car.getDailyRate());
+        dto.setLocation(car.getLocation());
+        dto.setDescription(car.getDescription());
+        dto.setIsAvailable(car.getIsAvailable());
+        dto.setIsActive(car.getIsActive());
+        dto.setOwnerEmail(car.getOwner().getEmail());
+        dto.setCreatedAt(car.getCreatedAt());
+        dto.setUpdatedAt(car.getUpdatedAt());
+
+        // Set image URLs
+        if (car.getImages() != null) {
+            dto.setImageUrls(car.getImages().stream()
+                    .map(CarImage::getImageUrl)
+                    .collect(Collectors.toList()));
+        }
+
+        return dto;
     }
 }

@@ -43,14 +43,14 @@ public class PaymentController {
         return ResponseEntity.ok(booking);
     }
 
-    @PostMapping("/{bookingId}/refund")
+    @PostMapping("/{encryptedBookingId}/refund")
     @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
     public ResponseEntity<Booking> initiateRefund(
-            @PathVariable Long bookingId,
+            @PathVariable String encryptedBookingId,
             Authentication authentication) {
         try {
-            Booking booking = paymentService.initiateRefund(bookingId);
-            return ResponseEntity.ok(booking);
+            // This needs to be updated to handle encrypted ID
+            throw new RuntimeException("Not implemented yet");
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(null);
         }

@@ -21,6 +21,7 @@ public class PaymentService {
 
     private final RazorpayClient razorpayClient;
     private final BookingRepository bookingRepository;
+    private final IdEncryptionService idEncryptionService;
 
     @Value("${razorpay.key.id}")
     private String razorpayKeyId;
@@ -28,14 +29,17 @@ public class PaymentService {
     @Value("${razorpay.key.secret}")
     private String razorpayKeySecret;
 
-    public PaymentService(RazorpayClient razorpayClient, BookingRepository bookingRepository) {
+    public PaymentService(RazorpayClient razorpayClient, BookingRepository bookingRepository,
+                          IdEncryptionService idEncryptionService) {
         this.razorpayClient = razorpayClient;
         this.bookingRepository = bookingRepository;
+        this.idEncryptionService = idEncryptionService;
     }
 
     @Transactional
     public PaymentResponse createPaymentOrder(CreatePaymentRequest request) throws RazorpayException {
-        Booking booking = bookingRepository.findById(request.getBookingId())
+        Long bookingId = idEncryptionService.decryptId(request.getBookingId());
+        Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
 
         // Validate booking can accept payment
@@ -68,7 +72,8 @@ public class PaymentService {
 
     @Transactional
     public Booking verifyPayment(PaymentVerificationRequest request) {
-        Booking booking = bookingRepository.findById(request.getBookingId())
+        Long bookingId = idEncryptionService.decryptId(request.getBookingId());
+        Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
 
         try {
