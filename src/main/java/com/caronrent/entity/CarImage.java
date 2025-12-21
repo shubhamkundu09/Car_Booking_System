@@ -1,5 +1,6 @@
 package com.caronrent.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -13,6 +14,7 @@ public class CarImage {
 
     @ManyToOne
     @JoinColumn(name = "car_id", nullable = false)
+    @JsonIgnore
     private Car car;
 
     @Column(nullable = false)
