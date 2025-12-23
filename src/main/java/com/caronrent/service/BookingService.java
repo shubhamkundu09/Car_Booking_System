@@ -86,8 +86,20 @@ public class BookingService {
         booking.setSpecialRequests(bookingRequest.getSpecialRequests());
         booking.setStatus("PAYMENT_PENDING");
         booking.setPaymentStatus("PENDING");
+        booking.setAmountPaid(0.0);
+
+        // Temporarily mark car as unavailable until payment is confirmed
+        car.setIsAvailable(false);
+        carRepository.save(car);
 
         Booking savedBooking = bookingRepository.save(booking);
+
+        System.out.println("📝 Booking created with ID: " + savedBooking.getId());
+        System.out.println("💰 Payment required: " + totalAmount);
+        System.out.println("🚗 Car: " + car.getBrand() + " " + car.getModel());
+        System.out.println("👤 User: " + userEmail);
+        System.out.println("👑 Owner: " + car.getOwner().getEmail());
+
         return convertToResponseDTO(savedBooking);
     }
 
@@ -104,9 +116,20 @@ public class BookingService {
         User owner = userRepository.findByEmail(ownerEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        return bookingRepository.findByCarOwner(owner).stream()
+        List<BookingResponseDTO> bookings = bookingRepository.findByCarOwner(owner).stream()
                 .map(this::convertToResponseDTO)
                 .collect(Collectors.toList());
+
+        // Log for debugging
+        System.out.println("👑 Owner bookings for: " + ownerEmail);
+        bookings.forEach(b -> {
+            System.out.println("   Booking ID: " + b.getId());
+            System.out.println("   Status: " + b.getStatus());
+            System.out.println("   Payment Status: " + b.getPaymentStatus());
+            System.out.println("   Amount Paid: " + b.getAmountPaid());
+        });
+
+        return bookings;
     }
 
     @Transactional
@@ -121,8 +144,12 @@ public class BookingService {
         }
 
         // Check if booking can be confirmed
-        if (!booking.canBeConfirmed()) {
-            throw new RuntimeException("Booking cannot be confirmed. Check payment status.");
+        if (!"PAYMENT_CONFIRMED".equals(booking.getStatus())) {
+            throw new RuntimeException("Booking cannot be confirmed. Payment must be completed first.");
+        }
+
+        if (!"PAID".equals(booking.getPaymentStatus())) {
+            throw new RuntimeException("Payment not completed. Cannot confirm booking.");
         }
 
         // Update booking status
@@ -133,6 +160,11 @@ public class BookingService {
         booking.getCar().setIsAvailable(false);
 
         Booking updatedBooking = bookingRepository.save(booking);
+
+        System.out.println("✅ Booking confirmed: " + bookingId);
+        System.out.println("   Payment: " + booking.getPaymentStatus());
+        System.out.println("   Amount: " + booking.getAmountPaid());
+
         return convertToResponseDTO(updatedBooking);
     }
 
@@ -148,7 +180,7 @@ public class BookingService {
         }
 
         // Check if booking can be cancelled
-        if (!booking.canBeCancelled()) {
+        if ("CANCELLED".equals(booking.getStatus()) || "COMPLETED".equals(booking.getStatus())) {
             throw new RuntimeException("Booking cannot be cancelled");
         }
 
@@ -156,14 +188,18 @@ public class BookingService {
         if ("PAYMENT_PENDING".equals(booking.getStatus())) {
             // If payment not made yet, just cancel
             booking.setStatus("CANCELLED");
+            booking.setPaymentStatus("CANCELLED");
             booking.setCancelledAt(LocalDateTime.now());
 
             // Make car available again
             booking.getCar().setIsAvailable(true);
-        } else if ("CONFIRMED".equals(booking.getStatus())) {
-            // If confirmed, check if within cancellation window (24 hours before start)
+
+            System.out.println("❌ Booking cancelled (payment pending): " + bookingId);
+
+        } else if ("PAYMENT_CONFIRMED".equals(booking.getStatus()) || "CONFIRMED".equals(booking.getStatus())) {
+            // Check if within cancellation window (24 hours before start)
             if (LocalDateTime.now().isAfter(booking.getStartDate().minusHours(24))) {
-                throw new RuntimeException("Cannot cancel confirmed booking less than 24 hours before start");
+                throw new RuntimeException("Cannot cancel booking less than 24 hours before start");
             }
 
             booking.setStatus("CANCELLED");
@@ -176,6 +212,8 @@ public class BookingService {
             if ("PAID".equals(booking.getPaymentStatus())) {
                 try {
                     paymentService.initiateRefund(bookingId);
+                    booking.setPaymentStatus("REFUNDED");
+                    System.out.println("💸 Refund initiated for booking: " + bookingId);
                 } catch (Exception e) {
                     throw new RuntimeException("Booking cancelled but refund failed: " + e.getMessage());
                 }
@@ -198,7 +236,7 @@ public class BookingService {
         }
 
         // Check if booking can be cancelled by owner
-        if (!booking.canBeCancelled() || "CANCELLED".equals(booking.getStatus())) {
+        if ("CANCELLED".equals(booking.getStatus()) || "COMPLETED".equals(booking.getStatus())) {
             throw new RuntimeException("Booking cannot be cancelled");
         }
 
@@ -217,9 +255,12 @@ public class BookingService {
         if ("PAID".equals(booking.getPaymentStatus())) {
             try {
                 paymentService.initiateRefund(bookingId);
+                booking.setPaymentStatus("REFUNDED");
             } catch (Exception e) {
                 throw new RuntimeException("Booking cancelled but refund failed: " + e.getMessage());
             }
+        } else if ("PENDING".equals(booking.getPaymentStatus())) {
+            booking.setPaymentStatus("CANCELLED");
         }
 
         Booking updatedBooking = bookingRepository.save(booking);
@@ -233,8 +274,14 @@ public class BookingService {
 
         booking.setPaymentStatus(status);
 
-        // If payment fails, make car available again
-        if ("FAILED".equals(status)) {
+        // Update booking status based on payment
+        if ("PAID".equals(status)) {
+            booking.setStatus("PAYMENT_CONFIRMED");
+            booking.setAmountPaid(booking.getTotalAmount());
+        } else if ("FAILED".equals(status)) {
+            booking.setStatus("CANCELLED");
+            booking.getCar().setIsAvailable(true);
+        } else if ("REFUNDED".equals(status)) {
             booking.setStatus("CANCELLED");
             booking.getCar().setIsAvailable(true);
         }
@@ -248,17 +295,6 @@ public class BookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Booking not found"));
         return convertToResponseDTO(booking);
-    }
-
-    public List<BookingResponseDTO> getActiveBookingsForCar(String encryptedCarId) {
-        Long carId = idEncryptionService.decryptId(encryptedCarId);
-        Car car = carRepository.findById(carId)
-                .orElseThrow(() -> new RuntimeException("Car not found"));
-
-        return bookingRepository.findByCar(car).stream()
-                .filter(b -> !"CANCELLED".equals(b.getStatus()) && !"COMPLETED".equals(b.getStatus()))
-                .map(this::convertToResponseDTO)
-                .toList();
     }
 
     private BookingResponseDTO convertToResponseDTO(Booking booking) {

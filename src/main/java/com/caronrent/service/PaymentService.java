@@ -13,8 +13,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.security.MessageDigest;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Base64;
 
 @Service
 public class PaymentService {
@@ -47,12 +50,20 @@ public class PaymentService {
             throw new RuntimeException("Booking is not in payment pending state");
         }
 
+        // Validate amount matches booking total
+        if (!request.getAmount().equals(booking.getTotalAmount())) {
+            throw new RuntimeException("Payment amount does not match booking total");
+        }
+
         // Create Razorpay order
         JSONObject orderRequest = new JSONObject();
-        orderRequest.put("amount", request.getAmount() * 100); // Amount in paise
+        orderRequest.put("amount", (int) (request.getAmount() * 100)); // Amount in paise
         orderRequest.put("currency", request.getCurrency());
         orderRequest.put("receipt", "booking_" + booking.getId());
-        orderRequest.put("payment_capture", 1);
+        orderRequest.put("payment_capture", 1); // Auto-capture payment
+        orderRequest.put("notes", new JSONObject()
+                .put("booking_id", booking.getId())
+                .put("user_email", booking.getUser().getEmail()));
 
         Order order = razorpayClient.orders.create(orderRequest);
 
@@ -78,41 +89,54 @@ public class PaymentService {
 
         try {
             // Verify payment signature
-            String generatedSignature = generateSignature(
-                    request.getRazorpayOrderId() + "|" + request.getRazorpayPaymentId(),
-                    razorpayKeySecret
-            );
+            String data = request.getRazorpayOrderId() + "|" + request.getRazorpayPaymentId();
+            String generatedSignature = calculateHMAC(data, razorpayKeySecret);
 
             if (generatedSignature.equals(request.getRazorpaySignature())) {
-                // Payment successful
+                // Payment successful - Update booking status
                 booking.setPaymentStatus("PAID");
                 booking.setPaymentId(request.getRazorpayPaymentId());
                 booking.setAmountPaid(booking.getTotalAmount());
-                booking.setStatus("PAYMENT_PENDING"); // Now ready for confirmation
+                booking.setStatus("PAYMENT_CONFIRMED"); // Changed from PAYMENT_PENDING
                 booking.setUpdatedAt(LocalDateTime.now());
+
+                // Log payment success
+                System.out.println("✅ Payment verified for booking ID: " + booking.getId());
+                System.out.println("💰 Amount paid: " + booking.getAmountPaid());
+                System.out.println("📧 User: " + booking.getUser().getEmail());
+                System.out.println("🚗 Car owner: " + booking.getCar().getOwner().getEmail());
 
                 return bookingRepository.save(booking);
             } else {
+                // Signature mismatch
+                booking.setPaymentStatus("FAILED");
+                bookingRepository.save(booking);
                 throw new RuntimeException("Invalid payment signature");
             }
         } catch (Exception e) {
+            // Payment verification failed
             booking.setPaymentStatus("FAILED");
             bookingRepository.save(booking);
             throw new RuntimeException("Payment verification failed: " + e.getMessage());
         }
     }
 
-    private String generateSignature(String data, String secret) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        byte[] hash = md.digest(data.getBytes());
+    // Helper method to calculate HMAC signature
+    private String calculateHMAC(String data, String secret) throws Exception {
+        Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
+        SecretKeySpec secretKey = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        sha256_HMAC.init(secretKey);
+        byte[] hash = sha256_HMAC.doFinal(data.getBytes(StandardCharsets.UTF_8));
+        return bytesToHex(hash);
+    }
 
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : hash) {
-            String hex = Integer.toHexString(0xff & b);
-            if (hex.length() == 1) hexString.append('0');
-            hexString.append(hex);
+    // Helper method to convert bytes to hex
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder result = new StringBuilder();
+        for (byte b : bytes) {
+            result.append(String.format("%02x", b));
         }
-        return hexString.toString();
+        return result.toString();
     }
 
     @Transactional
@@ -128,10 +152,19 @@ public class PaymentService {
             throw new RuntimeException("Booking is already cancelled");
         }
 
+        // Check if booking can be refunded (within cancellation period)
+        if (LocalDateTime.now().isAfter(booking.getStartDate().minusHours(24))) {
+            throw new RuntimeException("Cannot refund booking within 24 hours of start date");
+        }
+
         // Create Razorpay refund
         JSONObject refundRequest = new JSONObject();
         refundRequest.put("payment_id", booking.getPaymentId());
-        refundRequest.put("amount", booking.getAmountPaid() * 100); // Amount in paise
+        refundRequest.put("amount", (int) (booking.getAmountPaid() * 100)); // Amount in paise
+        refundRequest.put("speed", "normal");
+        refundRequest.put("notes", new JSONObject()
+                .put("booking_id", booking.getId())
+                .put("reason", "Booking cancellation"));
 
         com.razorpay.Refund refund = razorpayClient.payments.refund(booking.getPaymentId(), refundRequest);
 
@@ -144,6 +177,16 @@ public class PaymentService {
         // Make car available again
         booking.getCar().setIsAvailable(true);
 
+        System.out.println("💸 Refund initiated for booking ID: " + booking.getId());
+        System.out.println("🔄 Refund ID: " + refund.get("id"));
+        System.out.println("💰 Refund amount: " + booking.getAmountPaid());
+
         return bookingRepository.save(booking);
+    }
+
+    // New method to get payment details
+    public JSONObject getPaymentDetails(String paymentId) throws RazorpayException {
+        com.razorpay.Payment payment = razorpayClient.payments.fetch(paymentId);
+        return new JSONObject(payment.toString());
     }
 }
