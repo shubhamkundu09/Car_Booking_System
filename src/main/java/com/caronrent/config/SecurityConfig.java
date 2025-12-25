@@ -56,7 +56,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         return request -> {
             CorsConfiguration cfg = new CorsConfiguration();
-            cfg.setAllowedOriginPatterns(List.of("http://localhost:8083"));
+            cfg.setAllowedOriginPatterns(List.of("http://127.0.0.1:3000"));
             cfg.setAllowedMethods(List.of("GET","POST","PUT","DELETE","OPTIONS"));
             cfg.setAllowedHeaders(List.of("*"));
             cfg.setExposedHeaders(List.of("Authorization"));
