@@ -17,13 +17,15 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final OTPService otpService;
     private final JwtService jwtService;
+    private final EmailService emailService; // Added
 
     public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder,
-                       OTPService otpService, JwtService jwtService) {
+                       OTPService otpService, JwtService jwtService, EmailService emailService) { // Updated
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.otpService = otpService;
         this.jwtService = jwtService;
+        this.emailService = emailService; // Added
     }
 
     public String signup(SignupRequest request) {
@@ -37,9 +39,6 @@ public class AuthService {
         return "OTP sent to your email. Please verify to complete registration.";
     }
 
-
-
-    // Updated method that accepts password in OTP verification
     public String verifyOtpAndRegisterWithPassword(VerifyOTPRequest request) {
         // Verify OTP
         if (!otpService.verifyOTP(request.getEmail(), request.getOtp())) {
@@ -54,11 +53,21 @@ public class AuthService {
         // Create user with actual password
         User user = new User();
         user.setEmail(request.getEmail());
-        user.setPassword(passwordEncoder.encode(request.getPassword())); // Use actual password
+        user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setEnabled(true);
-        user.setRoles(List.of(request.getRole())); 
+        user.setRoles(List.of(request.getRole()));
 
         userRepository.save(user);
+
+        // Send registration success email
+        try {
+            String role = request.getRole().replace("ROLE_", "");
+            emailService.sendRegistrationSuccessEmail(request.getEmail(), role);
+            System.out.println("✅ Registration success email sent to: " + request.getEmail());
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send registration email: " + e.getMessage());
+            // Don't throw exception, just log it
+        }
 
         return "Registration successful!";
     }
@@ -66,11 +75,6 @@ public class AuthService {
     public String login(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
                 .orElseThrow(() -> new RuntimeException("User not found"));
-
-        // Debug: Print passwords to see what's happening
-        System.out.println("User entered password: " + request.getPassword());
-        System.out.println("Stored hashed password: " + user.getPassword());
-        System.out.println("Password matches: " + passwordEncoder.matches(request.getPassword(), user.getPassword()));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
@@ -85,6 +89,4 @@ public class AuthService {
 
         return jwtService.generateToken(userDetails);
     }
-
-
 }

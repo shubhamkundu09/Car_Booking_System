@@ -12,6 +12,7 @@ import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -23,15 +24,17 @@ public class BookingService {
     private final UserRepository userRepository;
     private final PaymentService paymentService;
     private final IdEncryptionService idEncryptionService;
+    private final EmailService emailService;
 
     public BookingService(BookingRepository bookingRepository, CarRepository carRepository,
                           UserRepository userRepository, PaymentService paymentService,
-                          IdEncryptionService idEncryptionService) {
+                          IdEncryptionService idEncryptionService, EmailService emailService) {
         this.bookingRepository = bookingRepository;
         this.carRepository = carRepository;
         this.userRepository = userRepository;
         this.paymentService = paymentService;
         this.idEncryptionService = idEncryptionService;
+        this.emailService = emailService;
     }
 
     @Transactional
@@ -42,6 +45,22 @@ public class BookingService {
 
         Car car = carRepository.findById(carId)
                 .orElseThrow(() -> new RuntimeException("Car not found"));
+
+        // Validate document URLs (all three are mandatory)
+        if (bookingRequest.getDrivingLicenseUrl() == null || bookingRequest.getDrivingLicenseUrl().isEmpty()) {
+            throw new RuntimeException("Driving license URL is required");
+        }
+        if (bookingRequest.getAadharCardUrl() == null || bookingRequest.getAadharCardUrl().isEmpty()) {
+            throw new RuntimeException("Aadhar card URL is required");
+        }
+        if (bookingRequest.getPoliceVerificationUrl() == null || bookingRequest.getPoliceVerificationUrl().isEmpty()) {
+            throw new RuntimeException("Police verification document URL is required");
+        }
+
+        // Validate URLs are valid (basic URL validation)
+        validateUrl(bookingRequest.getDrivingLicenseUrl(), "Driving license URL");
+        validateUrl(bookingRequest.getAadharCardUrl(), "Aadhar card URL");
+        validateUrl(bookingRequest.getPoliceVerificationUrl(), "Police verification document URL");
 
         // Check if car is available
         if (!car.getIsAvailable() || !car.getIsActive()) {
@@ -84,6 +103,11 @@ public class BookingService {
         booking.setTotalDays((int) days);
         booking.setTotalAmount(totalAmount);
         booking.setSpecialRequests(bookingRequest.getSpecialRequests());
+        // Set document URLs
+        booking.setDrivingLicenseUrl(bookingRequest.getDrivingLicenseUrl());
+        booking.setAadharCardUrl(bookingRequest.getAadharCardUrl());
+        booking.setPoliceVerificationUrl(bookingRequest.getPoliceVerificationUrl());
+
         booking.setStatus("PAYMENT_PENDING");
         booking.setPaymentStatus("PENDING");
         booking.setAmountPaid(0.0);
@@ -99,8 +123,50 @@ public class BookingService {
         System.out.println("🚗 Car: " + car.getBrand() + " " + car.getModel());
         System.out.println("👤 User: " + userEmail);
         System.out.println("👑 Owner: " + car.getOwner().getEmail());
+        System.out.println("📄 Documents uploaded:");
+        System.out.println("   - Driving License: " + bookingRequest.getDrivingLicenseUrl());
+        System.out.println("   - Aadhar Card: " + bookingRequest.getAadharCardUrl());
+        System.out.println("   - Police Verification: " + bookingRequest.getPoliceVerificationUrl());
+
+        // Send emails for booking creation
+        sendBookingCreationEmails(savedBooking, car, userEmail);
 
         return convertToResponseDTO(savedBooking);
+    }
+
+    private void sendBookingCreationEmails(Booking booking, Car car, String userEmail) {
+        try {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm");
+            String bookingDates = booking.getStartDate().format(formatter) + " to " +
+                    booking.getEndDate().format(formatter);
+            String carDetails = car.getBrand() + " " + car.getModel() + " (" + car.getRegistrationNumber() + ")";
+            String encryptedBookingId = idEncryptionService.encryptId(booking.getId());
+
+            // Send email to user
+            emailService.sendBookingCreatedEmail(
+                    userEmail,
+                    encryptedBookingId,
+                    carDetails,
+                    bookingDates,
+                    String.valueOf(booking.getTotalAmount())
+            );
+            System.out.println("✅ Booking creation email sent to user: " + userEmail);
+
+            // Send email to car owner
+            emailService.sendBookingCreatedToOwnerEmail(
+                    car.getOwner().getEmail(),
+                    encryptedBookingId,
+                    carDetails,
+                    userEmail,
+                    bookingDates,
+                    String.valueOf(booking.getTotalAmount())
+            );
+            System.out.println("✅ Booking creation email sent to owner: " + car.getOwner().getEmail());
+
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send booking creation emails: " + e.getMessage());
+            // Don't throw exception, just log it
+        }
     }
 
     public List<BookingResponseDTO> getUserBookings(String userEmail) {
@@ -165,7 +231,33 @@ public class BookingService {
         System.out.println("   Payment: " + booking.getPaymentStatus());
         System.out.println("   Amount: " + booking.getAmountPaid());
 
+        // Send booking confirmation email
+        sendBookingConfirmationEmail(updatedBooking);
+
         return convertToResponseDTO(updatedBooking);
+    }
+
+    private void sendBookingConfirmationEmail(Booking booking) {
+        try {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm");
+            String bookingDates = booking.getStartDate().format(formatter) + " to " +
+                    booking.getEndDate().format(formatter);
+            String carDetails = booking.getCar().getBrand() + " " + booking.getCar().getModel() +
+                    " (" + booking.getCar().getRegistrationNumber() + ")";
+
+            // Send email to user
+            emailService.sendBookingConfirmedEmail(
+                    booking.getUser().getEmail(),
+                    idEncryptionService.encryptId(booking.getId()),
+                    carDetails,
+                    bookingDates
+            );
+            System.out.println("✅ Booking confirmation email sent to user: " + booking.getUser().getEmail());
+
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send booking confirmation email: " + e.getMessage());
+            // Don't throw exception, just log it
+        }
     }
 
     @Transactional
@@ -183,6 +275,8 @@ public class BookingService {
         if ("CANCELLED".equals(booking.getStatus()) || "COMPLETED".equals(booking.getStatus())) {
             throw new RuntimeException("Booking cannot be cancelled");
         }
+
+        String reason = "Booking cancelled by user";
 
         // Different handling based on status
         if ("PAYMENT_PENDING".equals(booking.getStatus())) {
@@ -213,6 +307,7 @@ public class BookingService {
                 try {
                     paymentService.initiateRefund(bookingId);
                     booking.setPaymentStatus("REFUNDED");
+                    reason = "Booking cancelled by user with refund";
                     System.out.println("💸 Refund initiated for booking: " + bookingId);
                 } catch (Exception e) {
                     throw new RuntimeException("Booking cancelled but refund failed: " + e.getMessage());
@@ -221,7 +316,46 @@ public class BookingService {
         }
 
         Booking updatedBooking = bookingRepository.save(booking);
+
+        // Send cancellation emails
+        sendCancellationEmails(updatedBooking, "user", reason);
+
         return convertToResponseDTO(updatedBooking);
+    }
+
+    private void sendCancellationEmails(Booking booking, String cancelledBy, String reason) {
+        try {
+            String encryptedBookingId = idEncryptionService.encryptId(booking.getId());
+            String refundInfo = null;
+
+            if ("REFUNDED".equals(booking.getPaymentStatus())) {
+                refundInfo = "Refund has been processed. Amount: ₹" + booking.getAmountPaid();
+            }
+
+            // Send email to user
+            emailService.sendBookingCancelledEmail(
+                    booking.getUser().getEmail(),
+                    encryptedBookingId,
+                    "Cancelled by " + cancelledBy + ". Reason: " + reason,
+                    refundInfo
+            );
+            System.out.println("✅ Cancellation email sent to user: " + booking.getUser().getEmail());
+
+            // Send email to car owner (except when owner cancelled)
+            if (!"owner".equals(cancelledBy)) {
+                emailService.sendBookingCancelledEmail(
+                        booking.getCar().getOwner().getEmail(),
+                        encryptedBookingId,
+                        "Cancelled by " + cancelledBy + ". Reason: " + reason,
+                        null
+                );
+                System.out.println("✅ Cancellation email sent to owner: " + booking.getCar().getOwner().getEmail());
+            }
+
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send cancellation emails: " + e.getMessage());
+            // Don't throw exception, just log it
+        }
     }
 
     @Transactional
@@ -245,6 +379,8 @@ public class BookingService {
             throw new RuntimeException("Cannot cancel confirmed booking. Contact admin.");
         }
 
+        String reason = "Booking cancelled by car owner";
+
         booking.setStatus("CANCELLED");
         booking.setCancelledAt(LocalDateTime.now());
 
@@ -256,6 +392,7 @@ public class BookingService {
             try {
                 paymentService.initiateRefund(bookingId);
                 booking.setPaymentStatus("REFUNDED");
+                reason = "Booking cancelled by owner with refund";
             } catch (Exception e) {
                 throw new RuntimeException("Booking cancelled but refund failed: " + e.getMessage());
             }
@@ -264,6 +401,10 @@ public class BookingService {
         }
 
         Booking updatedBooking = bookingRepository.save(booking);
+
+        // Send cancellation emails
+        sendCancellationEmails(updatedBooking, "owner", reason);
+
         return convertToResponseDTO(updatedBooking);
     }
 
@@ -278,16 +419,48 @@ public class BookingService {
         if ("PAID".equals(status)) {
             booking.setStatus("PAYMENT_CONFIRMED");
             booking.setAmountPaid(booking.getTotalAmount());
+            // Send payment success emails (if called by admin)
+            sendPaymentSuccessEmails(booking);
         } else if ("FAILED".equals(status)) {
             booking.setStatus("CANCELLED");
             booking.getCar().setIsAvailable(true);
+            sendCancellationEmails(booking, "system", "Payment failed");
         } else if ("REFUNDED".equals(status)) {
             booking.setStatus("CANCELLED");
             booking.getCar().setIsAvailable(true);
+            sendCancellationEmails(booking, "system", "Payment refunded");
         }
 
         Booking updatedBooking = bookingRepository.save(booking);
         return convertToResponseDTO(updatedBooking);
+    }
+
+    private void sendPaymentSuccessEmails(Booking booking) {
+        try {
+            String encryptedBookingId = idEncryptionService.encryptId(booking.getId());
+
+            // Send email to user
+            emailService.sendPaymentSuccessEmail(
+                    booking.getUser().getEmail(),
+                    encryptedBookingId,
+                    String.valueOf(booking.getAmountPaid()),
+                    booking.getPaymentId()
+            );
+            System.out.println("✅ Payment success email sent to user: " + booking.getUser().getEmail());
+
+            // Send email to car owner
+            emailService.sendPaymentSuccessToOwnerEmail(
+                    booking.getCar().getOwner().getEmail(),
+                    encryptedBookingId,
+                    String.valueOf(booking.getAmountPaid()),
+                    booking.getUser().getEmail()
+            );
+            System.out.println("✅ Payment success email sent to owner: " + booking.getCar().getOwner().getEmail());
+
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send payment success emails: " + e.getMessage());
+            // Don't throw exception, just log it
+        }
     }
 
     public BookingResponseDTO getBookingById(String encryptedBookingId) {
@@ -316,10 +489,21 @@ public class BookingService {
         dto.setOrderId(booking.getOrderId());
         dto.setAmountPaid(booking.getAmountPaid());
         dto.setSpecialRequests(booking.getSpecialRequests());
+        // Set document URLs
+        dto.setDrivingLicenseUrl(booking.getDrivingLicenseUrl());
+        dto.setAadharCardUrl(booking.getAadharCardUrl());
+        dto.setPoliceVerificationUrl(booking.getPoliceVerificationUrl());
+
         dto.setCreatedAt(booking.getCreatedAt());
         dto.setUpdatedAt(booking.getUpdatedAt());
         dto.setConfirmedAt(booking.getConfirmedAt());
         dto.setCancelledAt(booking.getCancelledAt());
         return dto;
+    }
+
+    private void validateUrl(String url, String fieldName) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            throw new RuntimeException(fieldName + " must be a valid URL starting with http:// or https://");
+        }
     }
 }

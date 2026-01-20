@@ -50,6 +50,16 @@ public class Booking {
 
     private String specialRequests;
 
+    // Add these three mandatory document fields
+    @Column(name = "driving_license_url", nullable = false)
+    private String drivingLicenseUrl;
+
+    @Column(name = "aadhar_card_url", nullable = false)
+    private String aadharCardUrl;
+
+    @Column(name = "police_verification_url", nullable = false)
+    private String policeVerificationUrl;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private LocalDateTime confirmedAt;
@@ -59,7 +69,7 @@ public class Booking {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
-        status = "PAYMENT_PENDING"; // Changed from PENDING
+        status = "PAYMENT_PENDING";
         paymentStatus = "PENDING";
         amountPaid = 0.0;
     }
@@ -77,9 +87,7 @@ public class Booking {
         return !"CANCELLED".equals(status) && !"COMPLETED".equals(status);
     }
 
-    // ========== ADDED: Helper method to check date overlap ==========
     public boolean overlapsWith(LocalDateTime start, LocalDateTime end) {
         return !(end.isBefore(this.startDate) || start.isAfter(this.endDate));
     }
-    // ========== END ADDITION ==========
 }

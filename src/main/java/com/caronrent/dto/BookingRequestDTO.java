@@ -9,4 +9,8 @@ public class BookingRequestDTO {
     private LocalDateTime startDate;
     private LocalDateTime endDate;
     private String specialRequests;
+    // Add these three mandatory document fields
+    private String drivingLicenseUrl;
+    private String aadharCardUrl;
+    private String policeVerificationUrl;
 }

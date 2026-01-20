@@ -22,6 +22,10 @@ public class BookingResponseDTO {
     private String orderId;
     private Double amountPaid;
     private String specialRequests;
+    // Add these three document fields to response
+    private String drivingLicenseUrl;
+    private String aadharCardUrl;
+    private String policeVerificationUrl;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private LocalDateTime confirmedAt;

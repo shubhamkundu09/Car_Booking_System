@@ -17,7 +17,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.Base64;
+import java.time.format.DateTimeFormatter;
 
 @Service
 public class PaymentService {
@@ -25,6 +25,7 @@ public class PaymentService {
     private final RazorpayClient razorpayClient;
     private final BookingRepository bookingRepository;
     private final IdEncryptionService idEncryptionService;
+    private final EmailService emailService;
 
     @Value("${razorpay.key.id}")
     private String razorpayKeyId;
@@ -33,10 +34,11 @@ public class PaymentService {
     private String razorpayKeySecret;
 
     public PaymentService(RazorpayClient razorpayClient, BookingRepository bookingRepository,
-                          IdEncryptionService idEncryptionService) {
+                          IdEncryptionService idEncryptionService, EmailService emailService) {
         this.razorpayClient = razorpayClient;
         this.bookingRepository = bookingRepository;
         this.idEncryptionService = idEncryptionService;
+        this.emailService = emailService;
     }
 
     @Transactional
@@ -97,7 +99,7 @@ public class PaymentService {
                 booking.setPaymentStatus("PAID");
                 booking.setPaymentId(request.getRazorpayPaymentId());
                 booking.setAmountPaid(booking.getTotalAmount());
-                booking.setStatus("PAYMENT_CONFIRMED"); // Changed from PAYMENT_PENDING
+                booking.setStatus("PAYMENT_CONFIRMED");
                 booking.setUpdatedAt(LocalDateTime.now());
 
                 // Log payment success
@@ -106,7 +108,12 @@ public class PaymentService {
                 System.out.println("📧 User: " + booking.getUser().getEmail());
                 System.out.println("🚗 Car owner: " + booking.getCar().getOwner().getEmail());
 
-                return bookingRepository.save(booking);
+                Booking savedBooking = bookingRepository.save(booking);
+
+                // Send payment success emails
+                sendPaymentSuccessEmails(savedBooking);
+
+                return savedBooking;
             } else {
                 // Signature mismatch
                 booking.setPaymentStatus("FAILED");
@@ -118,6 +125,34 @@ public class PaymentService {
             booking.setPaymentStatus("FAILED");
             bookingRepository.save(booking);
             throw new RuntimeException("Payment verification failed: " + e.getMessage());
+        }
+    }
+
+    private void sendPaymentSuccessEmails(Booking booking) {
+        try {
+            String encryptedBookingId = idEncryptionService.encryptId(booking.getId());
+
+            // Send email to user
+            emailService.sendPaymentSuccessEmail(
+                    booking.getUser().getEmail(),
+                    encryptedBookingId,
+                    String.valueOf(booking.getAmountPaid()),
+                    booking.getPaymentId()
+            );
+            System.out.println("✅ Payment success email sent to user: " + booking.getUser().getEmail());
+
+            // Send email to car owner
+            emailService.sendPaymentSuccessToOwnerEmail(
+                    booking.getCar().getOwner().getEmail(),
+                    encryptedBookingId,
+                    String.valueOf(booking.getAmountPaid()),
+                    booking.getUser().getEmail()
+            );
+            System.out.println("✅ Payment success email sent to owner: " + booking.getCar().getOwner().getEmail());
+
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send payment success emails: " + e.getMessage());
+            // Don't throw exception, just log it
         }
     }
 
@@ -181,7 +216,101 @@ public class PaymentService {
         System.out.println("🔄 Refund ID: " + refund.get("id"));
         System.out.println("💰 Refund amount: " + booking.getAmountPaid());
 
-        return bookingRepository.save(booking);
+        Booking savedBooking = bookingRepository.save(booking);
+
+        // Send cancellation email with refund info
+        sendCancellationEmailWithRefund(savedBooking, "Booking cancelled with refund",
+                "Refund ID: " + refund.get("id") + ", Amount: ₹" + booking.getAmountPaid());
+
+        return savedBooking;
+    }
+
+    private void sendCancellationEmailWithRefund(Booking booking, String reason, String refundInfo) {
+        try {
+            String encryptedBookingId = idEncryptionService.encryptId(booking.getId());
+
+            // Send email to user
+            emailService.sendBookingCancelledEmail(
+                    booking.getUser().getEmail(),
+                    encryptedBookingId,
+                    reason,
+                    refundInfo
+            );
+            System.out.println("✅ Cancellation email with refund sent to user: " + booking.getUser().getEmail());
+
+            // Send email to car owner
+            emailService.sendBookingCancelledEmail(
+                    booking.getCar().getOwner().getEmail(),
+                    encryptedBookingId,
+                    reason,
+                    null
+            );
+            System.out.println("✅ Cancellation email sent to owner: " + booking.getCar().getOwner().getEmail());
+
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send cancellation emails: " + e.getMessage());
+            // Don't throw exception, just log it
+        }
+    }
+
+    // New method to send booking completion emails
+    @Transactional
+    public void markBookingAsCompleted(Long bookingId) {
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new RuntimeException("Booking not found"));
+
+        if (!"CONFIRMED".equals(booking.getStatus())) {
+            throw new RuntimeException("Only confirmed bookings can be marked as completed");
+        }
+
+        if (LocalDateTime.now().isBefore(booking.getEndDate())) {
+            throw new RuntimeException("Cannot mark booking as completed before end date");
+        }
+
+        booking.setStatus("COMPLETED");
+        booking.setUpdatedAt(LocalDateTime.now());
+
+        // Make car available again
+        booking.getCar().setIsAvailable(true);
+
+        Booking savedBooking = bookingRepository.save(booking);
+
+        // Send booking completion emails
+        sendBookingCompletionEmails(savedBooking);
+    }
+
+    private void sendBookingCompletionEmails(Booking booking) {
+        try {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm");
+            String bookingDates = booking.getStartDate().format(formatter) + " to " +
+                    booking.getEndDate().format(formatter);
+            String carDetails = booking.getCar().getBrand() + " " + booking.getCar().getModel() +
+                    " (" + booking.getCar().getRegistrationNumber() + ")";
+
+            // Send email to user
+            emailService.sendBookingCompletedEmail(
+                    booking.getUser().getEmail(),
+                    idEncryptionService.encryptId(booking.getId()),
+                    carDetails,
+                    null, // No need for customer email here
+                    String.valueOf(booking.getAmountPaid())
+            );
+            System.out.println("✅ Booking completion email sent to user: " + booking.getUser().getEmail());
+
+            // Send email to car owner
+            emailService.sendBookingCompletedEmail(
+                    booking.getCar().getOwner().getEmail(),
+                    idEncryptionService.encryptId(booking.getId()),
+                    carDetails,
+                    booking.getUser().getEmail(),
+                    String.valueOf(booking.getAmountPaid())
+            );
+            System.out.println("✅ Booking completion email sent to owner: " + booking.getCar().getOwner().getEmail());
+
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to send booking completion emails: " + e.getMessage());
+            // Don't throw exception, just log it
+        }
     }
 
     // New method to get payment details
