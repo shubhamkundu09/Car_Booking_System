@@ -4,10 +4,14 @@ import com.caronrent.dto.CarDTO;
 import com.caronrent.dto.CarResponseDTO;
 import com.caronrent.dto.CarStatusDTO;
 import com.caronrent.service.CarService;
+import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -22,10 +26,14 @@ public class CarController {
     }
 
     // Car Owner endpoints
-    @PostMapping("/owner/add")
+    @PostMapping(value = "/owner/add", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('CAROWNER', 'ADMIN')")
-    public ResponseEntity<CarResponseDTO> addCar(@RequestBody CarDTO carDTO, Authentication authentication) {
+    public ResponseEntity<CarResponseDTO> addCar(
+            @RequestPart("car") @Valid CarDTO carDTO,
+            @RequestPart(value = "images", required = false) List<MultipartFile> images,
+            Authentication authentication) {
         String email = authentication.getName();
+        carDTO.setImages(images);
         CarResponseDTO car = carService.addCar(email, carDTO);
         return ResponseEntity.ok(car);
     }

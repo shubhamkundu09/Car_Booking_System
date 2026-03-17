@@ -23,13 +23,15 @@ public class CarService {
     private final UserRepository userRepository;
     private final CarImageRepository carImageRepository;
     private final IdEncryptionService idEncryptionService;
+    private final FileStorageService fileStorageService;
 
     public CarService(CarRepository carRepository, UserRepository userRepository,
-                      CarImageRepository carImageRepository, IdEncryptionService idEncryptionService) {
+                      CarImageRepository carImageRepository, IdEncryptionService idEncryptionService, FileStorageService fileStorageService) {
         this.carRepository = carRepository;
         this.userRepository = userRepository;
         this.carImageRepository = carImageRepository;
         this.idEncryptionService = idEncryptionService;
+        this.fileStorageService= fileStorageService;
     }
 
     @Transactional
@@ -58,11 +60,13 @@ public class CarService {
         Car savedCar = carRepository.save(car);
 
         // Save images if provided
-        if (carDTO.getImageUrls() != null && !carDTO.getImageUrls().isEmpty()) {
-            for (int i = 0; i < carDTO.getImageUrls().size(); i++) {
+        if (carDTO.getImages() != null && !carDTO.getImages().isEmpty()) {
+            List<String> imageUrls = fileStorageService.storeCarImages(carDTO.getImages());
+
+            for (int i = 0; i < imageUrls.size(); i++) {
                 CarImage image = new CarImage();
                 image.setCar(savedCar);
-                image.setImageUrl(carDTO.getImageUrls().get(i));
+                image.setImageUrl(imageUrls.get(i));
                 image.setIsPrimary(i == 0); // First image is primary
                 carImageRepository.save(image);
             }
@@ -232,11 +236,12 @@ public class CarService {
         dto.setCreatedAt(car.getCreatedAt());
         dto.setUpdatedAt(car.getUpdatedAt());
 
-        // Set image URLs
-        if (car.getImages() != null) {
-            dto.setImageUrls(car.getImages().stream()
+        // Set image URLs - these are already full URLs from FileStorageService
+        if (car.getImages() != null && !car.getImages().isEmpty()) {
+            List<String> imageUrls = car.getImages().stream()
                     .map(CarImage::getImageUrl)
-                    .collect(Collectors.toList()));
+                    .collect(Collectors.toList());
+            dto.setImageUrls(imageUrls);
         }
 
         return dto;

@@ -3,10 +3,14 @@ package com.caronrent.controller;
 import com.caronrent.dto.BookingRequestDTO;
 import com.caronrent.dto.BookingResponseDTO;
 import com.caronrent.service.BookingService;
+import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
 import java.util.List;
 
 @RestController
@@ -19,12 +23,20 @@ public class BookingController {
     }
 
     // User endpoints
-    @PostMapping("/user/create")
+    @PostMapping(value = "/user/create", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
     public ResponseEntity<BookingResponseDTO> createBooking(
-            @RequestBody BookingRequestDTO bookingRequest,
+            @RequestPart("booking") @Valid BookingRequestDTO bookingRequest,
+            @RequestPart("drivingLicense") MultipartFile drivingLicense,
+            @RequestPart("aadharCard") MultipartFile aadharCard,
+            @RequestPart("policeVerification") MultipartFile policeVerification,
             Authentication authentication) {
+
         String email = authentication.getName();
+        bookingRequest.setDrivingLicense(drivingLicense);
+        bookingRequest.setAadharCard(aadharCard);
+        bookingRequest.setPoliceVerification(policeVerification);
+
         BookingResponseDTO booking = bookingService.createBooking(email, bookingRequest);
         return ResponseEntity.ok(booking);
     }

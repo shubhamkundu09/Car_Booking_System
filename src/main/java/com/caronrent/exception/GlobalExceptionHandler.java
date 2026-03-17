@@ -43,4 +43,14 @@ public class GlobalExceptionHandler {
         error.put("message", ex.getMessage());
         return new ResponseEntity<>(error, HttpStatus.FORBIDDEN);
     }
+
+    @ExceptionHandler(FileStorageException.class)
+    public ResponseEntity<Map<String, Object>> handleFileStorageException(FileStorageException ex) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("timestamp", new Date());
+        error.put("status", HttpStatus.BAD_REQUEST.value());
+        error.put("error", "File Upload Error");
+        error.put("message", ex.getMessage());
+        return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
 }

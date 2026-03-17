@@ -17,8 +17,8 @@ public class CarImage {
     @JsonIgnore
     private Car car;
 
-    @Column(nullable = false)
-    private String imageUrl;
+    @Column(nullable = false, length = 500)
+    private String imageUrl;  // This will store the full URL now
 
     @Column(nullable = false)
     private Boolean isPrimary = false;

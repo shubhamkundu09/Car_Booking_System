@@ -27,6 +27,12 @@
             <version>1.4.8</version> <!-- Check for latest version -->
         </dependency>
 
+<!--        validations -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
 
 <!--        Spring web=============-->
         <dependency>
